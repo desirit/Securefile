@@ -95,6 +95,9 @@
     const fileTypesContent = document.getElementById('fileTypesContent');
     const fileTypesArrow = document.getElementById('fileTypesArrow');
 
+    // Initialize droppedFiles globally
+    window.droppedFiles = null;
+
     // Drop functionality
     fileTypesToggle.addEventListener('click', () => {
       fileTypesContent.classList.toggle('hidden');
@@ -121,13 +124,15 @@
 
     fileInput.addEventListener('change', () => {
       window.droppedFiles = null;
-      updateDropText();
+      updateDropText(fileInput.files);
     });
 
-    function updateDropText(files = fileInput.files) {
-      dropText.textContent = files.length > 0
-        ? `${files.length} file(s) selected`
-        : 'Drag & drop files here or click to upload';
+    function updateDropText(files) {
+      if (!files || files.length === 0) {
+        dropText.textContent = 'Drag & drop files here or click to upload';
+        return;
+      }
+      dropText.textContent = `${files.length} file(s) selected`;
     }
 
     function checkFileType(fileName) {
@@ -147,64 +152,118 @@
     }
 
     async function uploadFiles() {
-      const password = document.getElementById('password').value;
-      const files = window.droppedFiles || fileInput.files;
-      if (!files.length) return;
-
-      const metadata = [];
-      for (let file of files) {
-        const check = checkFileType(file.name);
-        if (!check.allowed) {
-          status.textContent = check.message;
+      try {
+        const password = document.getElementById('password').value;
+        const files = window.droppedFiles || fileInput.files;
+        
+        // Check if files exist and have length property
+        if (!files || !files.length) {
+          status.textContent = 'Please select files to upload';
           status.classList.add('text-red-500');
           return;
         }
-        metadata.push({ name: file.name, type: file.type });
+
+        // Reset status classes
+        status.classList.remove('text-red-500', 'text-green-500');
+        
+        const metadata = [];
+        for (let i = 0; i < files.length; i++) {
+          const file = files[i];
+          const check = checkFileType(file.name);
+          if (!check.allowed) {
+            status.textContent = check.message;
+            status.classList.add('text-red-500');
+            return;
+          }
+          metadata.push({ name: file.name, type: file.type });
+        }
+
+        status.textContent = 'Getting upload URLs...';
+        loading.classList.remove('hidden');
+
+        try {
+          const presignedRes = await fetch(apiUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ password, files: metadata })
+          });
+
+          if (!presignedRes.ok) {
+            throw new Error(`Server responded with status: ${presignedRes.status}`);
+          }
+
+          const presigned = await presignedRes.json();
+          
+          if (!presigned || !presigned.body || !presigned.body.files) {
+            throw new Error('Invalid response from server');
+          }
+          
+          const uploadResults = presigned.body.files;
+          let uploadedCount = 0;
+
+          individualProgressContainer.innerHTML = '';
+          for (let i = 0; i < files.length; i++) {
+            const file = files[i];
+            const { url, name, key } = uploadResults[i];
+
+            const bar = document.createElement('div');
+            bar.classList.add('mb-2');
+            bar.innerHTML = `<label class="text-sm">${file.name}</label><div class="w-full bg-gray-200 rounded-full h-2.5"><div class="bg-green-500 h-2.5 rounded-full" style="width: 0%"></div></div>`;
+            individualProgressContainer.appendChild(bar);
+            const inner = bar.querySelector('.bg-green-500');
+
+            try {
+              const uploadResponse = await fetch(url, {
+                method: 'PUT',
+                headers: { 'Content-Type': file.type },
+                body: file
+              });
+              
+              if (!uploadResponse.ok) {
+                throw new Error(`Failed to upload ${file.name}: ${uploadResponse.status}`);
+              }
+            } catch (uploadError) {
+              console.error('Upload error:', uploadError);
+              inner.style.width = '0%';
+              inner.classList.remove('bg-green-500');
+              inner.classList.add('bg-red-500');
+              continue;
+            }
+
+            inner.style.width = '100%';
+            updateOverallProgress(++uploadedCount, files.length);
+          }
+
+          if (uploadedCount === files.length) {
+            status.textContent = 'All files uploaded!';
+            status.classList.add('text-green-500');
+            
+            try {
+              await fetch(apiUrl + '/notify', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ password, uploadedFiles: uploadResults.map(f => ({ name: f.name, s3Key: f.key })) })
+              });
+            } catch (notifyError) {
+              console.error('Notification error:', notifyError);
+              // Continue anyway as files were uploaded
+            }
+          } else {
+            status.textContent = `Uploaded ${uploadedCount} of ${files.length} files`;
+            status.classList.add('text-yellow-500');
+          }
+        } catch (error) {
+          console.error('Server error:', error);
+          status.textContent = `Error: ${error.message}`;
+          status.classList.add('text-red-500');
+        }
+      } catch (error) {
+        console.error('General error:', error);
+        status.textContent = `Error: ${error.message}`;
+        status.classList.add('text-red-500');
+      } finally {
+        loading.classList.add('hidden');
       }
-
-      status.textContent = 'Getting upload URLs...';
-      loading.classList.remove('hidden');
-
-      const presignedRes = await fetch(apiUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ password, files: metadata })
-      });
-
-      const presigned = await presignedRes.json();
-      const uploadResults = presigned.body.files;
-      let uploadedCount = 0;
-
-      individualProgressContainer.innerHTML = '';
-      for (let i = 0; i < files.length; i++) {
-        const file = files[i];
-        const { url, name, key } = uploadResults[i];
-
-        const bar = document.createElement('div');
-        bar.classList.add('mb-2');
-        bar.innerHTML = `<label class="text-sm">${file.name}</label><div class="w-full bg-gray-200 rounded-full h-2.5"><div class="bg-green-500 h-2.5 rounded-full" style="width: 0%"></div></div>`;
-        individualProgressContainer.appendChild(bar);
-        const inner = bar.querySelector('.bg-green-500');
-
-        await fetch(url, {
-          method: 'PUT',
-          headers: { 'Content-Type': file.type },
-          body: file
-        });
-
-        inner.style.width = '100%';
-        updateOverallProgress(++uploadedCount, files.length);
-      }
-
-      status.textContent = 'All files uploaded!';
-      status.classList.add('text-green-500');
-      loading.classList.add('hidden');
-
-      await fetch(apiUrl + '/notify', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ password, uploadedFiles: uploadResults.map(f => ({ name: f.name, s3Key: f.key })) })
-      });
     }
   </script>
 </body>
