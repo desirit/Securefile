@@ -43,7 +43,7 @@ Parameters:
     Description: 'e.g. fileupload'
 
 Resources:
-
+  # S3 Bucket for file storage
   S3Bucket:
     Type: AWS::S3::Bucket
     DeletionPolicy: Retain
@@ -54,7 +54,14 @@ Resources:
         BlockPublicPolicy: false
         IgnorePublicAcls: false
         RestrictPublicBuckets: false
+      CorsConfiguration:
+        CorsRules:
+          - AllowedHeaders: ['*']
+            AllowedMethods: [GET, PUT, POST, DELETE, HEAD]
+            AllowedOrigins: ['*']
+            MaxAge: 3000
 
+  # Lambda execution role
   LambdaExecutionRole:
     Type: AWS::IAM::Role
     Properties:
@@ -65,6 +72,8 @@ Resources:
             Principal:
               Service: lambda.amazonaws.com
             Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
       Policies:
         - PolicyName: LambdaS3Access
           PolicyDocument:
@@ -78,13 +87,8 @@ Resources:
                 Resource:
                   - !Sub arn:aws:s3:::${S3BucketName}
                   - !Sub arn:aws:s3:::${S3BucketName}/*
-              - Effect: Allow
-                Action:
-                  - logs:CreateLogGroup
-                  - logs:CreateLogStream
-                  - logs:PutLogEvents
-                Resource: "*"
 
+  # Lambda function
   LambdaFunction:
     Type: AWS::Lambda::Function
     Properties:
@@ -99,15 +103,10 @@ Resources:
         Variables:
           UPLOAD_PASSWORD: !Ref UploadPassword
           BUCKET_NAME: !Ref S3BucketName
+      Timeout: 30
+      MemorySize: 256
 
-  LambdaPermission:
-    Type: AWS::Lambda::Permission
-    Properties:
-      Action: lambda:InvokeFunction
-      FunctionName: !Ref LambdaFunction
-      Principal: apigateway.amazonaws.com
-      SourceArn: !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${ApiGateway}/*/*/*
-
+  # API Gateway
   ApiGateway:
     Type: AWS::ApiGateway::RestApi
     Properties:
@@ -116,6 +115,7 @@ Resources:
       EndpointConfiguration:
         Types: [REGIONAL]
 
+  # API Gateway resource for upload
   ApiGatewayResource:
     Type: AWS::ApiGateway::Resource
     Properties:
@@ -123,8 +123,10 @@ Resources:
       ParentId: !GetAtt ApiGateway.RootResourceId
       PathPart: upload
 
+  # API Gateway method for upload
   ApiGatewayMethod:
     Type: AWS::ApiGateway::Method
+    DependsOn: LambdaFunction
     Properties:
       RestApiId: !Ref ApiGateway
       ResourceId: !Ref ApiGatewayResource
@@ -139,6 +141,19 @@ Resources:
           ResponseParameters:
             method.response.header.Access-Control-Allow-Origin: true
 
+  # Lambda permission for API Gateway
+  LambdaPermission:
+    Type: AWS::Lambda::Permission
+    DependsOn: 
+      - LambdaFunction
+      - ApiGateway
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref LambdaFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${ApiGateway}/*/*/upload
+
+  # API Gateway OPTIONS method for CORS
   ApiGatewayOptionsMethod:
     Type: AWS::ApiGateway::Method
     Properties:
@@ -165,6 +180,7 @@ Resources:
             method.response.header.Access-Control-Allow-Headers: true
             method.response.header.Access-Control-Allow-Methods: true
 
+  # API Gateway resource for notify
   ApiGatewayNotifyResource:
     Type: AWS::ApiGateway::Resource
     Properties:
@@ -172,8 +188,10 @@ Resources:
       ParentId: !Ref ApiGatewayResource
       PathPart: notify
 
+  # API Gateway method for notify
   ApiGatewayNotifyMethod:
     Type: AWS::ApiGateway::Method
+    DependsOn: LambdaFunction
     Properties:
       RestApiId: !Ref ApiGateway
       ResourceId: !Ref ApiGatewayNotifyResource
@@ -188,6 +206,19 @@ Resources:
           ResponseParameters:
             method.response.header.Access-Control-Allow-Origin: true
 
+  # Lambda permission for notify endpoint
+  LambdaPermissionNotify:
+    Type: AWS::Lambda::Permission
+    DependsOn: 
+      - LambdaFunction
+      - ApiGateway
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref LambdaFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${ApiGateway}/*/*/upload/notify
+
+  # API Gateway OPTIONS method for notify
   ApiGatewayNotifyOptions:
     Type: AWS::ApiGateway::Method
     Properties:
@@ -214,6 +245,7 @@ Resources:
             method.response.header.Access-Control-Allow-Headers: true
             method.response.header.Access-Control-Allow-Methods: true
 
+  # API Gateway deployment
   ApiGatewayDeployment:
     Type: AWS::ApiGateway::Deployment
     DependsOn:
@@ -225,6 +257,7 @@ Resources:
       RestApiId: !Ref ApiGateway
       StageName: prod
 
+  # Amplify service role
   AmplifyServiceRole:
     Type: AWS::IAM::Role
     Properties:
@@ -235,6 +268,8 @@ Resources:
             Principal:
               Service: amplify.amazonaws.com
             Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AdministratorAccess-Amplify
       Policies:
         - PolicyName: AmplifyAccess
           PolicyDocument:
@@ -242,11 +277,11 @@ Resources:
             Statement:
               - Effect: Allow
                 Action:
-                  - amplify:*  
                   - s3:GetObject
                   - s3:ListBucket
                 Resource: "*"
 
+  # Amplify app
   AmplifyApp:
     Type: AWS::Amplify::App
     Properties:
@@ -279,6 +314,7 @@ Resources:
         - Name: COMPANY_NAME
           Value: !Ref CompanyName
 
+  # Amplify branch
   AmplifyBranch:
     Type: AWS::Amplify::Branch
     DependsOn: AmplifyApp
@@ -289,9 +325,12 @@ Resources:
       Stage: PRODUCTION
       Framework: NONE
 
+  # Custom domain setup - separated from auto-deployment
   AmplifyDomain:
     Type: AWS::Amplify::Domain
-    DependsOn: AmplifyBranch
+    DependsOn: 
+      - AmplifyApp
+      - AmplifyBranch
     Properties:
       AppId: !GetAtt AmplifyApp.AppId
       DomainName: !Ref CustomDomainName
@@ -307,3 +346,5 @@ Outputs:
     Value: !Sub 'https://${CustomDomainPrefix}.${CustomDomainName}'
   ApiUrl:
     Value: !Sub 'https://${ApiGateway}.execute-api.${AWS::Region}.amazonaws.com/prod/upload'
+  S3BucketURL:
+    Value: !GetAtt S3Bucket.WebsiteURL
