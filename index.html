@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Secure File Upload  %%COMPANY_NAME%%</title>
+  <title>Secure File Upload %%COMPANY_NAME%%</title>
   <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
 </head>
 <body class="bg-gray-100 flex items-center justify-center min-h-screen">
@@ -21,32 +21,6 @@
 
     <div class="mb-6">
       <label class="block text-sm font-medium text-gray-700">Upload Files</label>
-
-      <!-- File types toggle -->
-      <div class="mb-3">
-        <button type="button" id="fileTypesToggle" class="flex w-full justify-between items-center p-2 text-sm text-left font-medium text-blue-700 bg-blue-50 rounded hover:bg-blue-100 transition-colors">
-          <div class="flex items-center">
-            <svg class="h-5 w-5 mr-2" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor">
-              <path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clip-rule="evenodd" />
-            </svg>
-            <span>Click to view allowed file types</span>
-          </div>
-          <svg id="fileTypesArrow" class="h-5 w-5 transform transition-transform duration-200" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor">
-            <path fill-rule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clip-rule="evenodd" />
-          </svg>
-        </button>
-        <div id="fileTypesContent" class="hidden mt-2 p-3 bg-blue-50 border-l-4 border-blue-400 rounded">
-          <p class="text-sm text-blue-700"><strong>Allowed file types:</strong></p>
-          <ul class="mt-2 text-sm text-blue-700 list-disc ml-5">
-            <li>Documents: PDF, DOC, DOCX, TXT</li>
-            <li>Spreadsheets: XLS, XLSX, CSV</li>
-            <li>Email: EML, MSG</li>
-            <li>Images: JPG, PNG, GIF</li>
-          </ul>
-          <p class="text-sm text-yellow-700 mt-2"><strong>Not Allowed:</strong> ZIP files</p>
-        </div>
-      </div>
-
       <div id="dropZone" class="mt-1 flex flex-col items-center justify-center border-2 border-dashed border-gray-300 rounded-md p-6 cursor-pointer hover:border-blue-500 transition-colors">
         <span id="dropText" class="text-gray-500">Drag & drop files here or click to upload</span>
         <input type="file" id="fileInput" multiple class="hidden" />
@@ -73,15 +47,10 @@
     </div>
 
     <p id="status" class="mt-4 text-center text-sm"></p>
-    <div id="uploadedFilesContainer" class="mt-6 hidden">
-      <h2 class="text-lg font-semibold text-gray-800">Uploaded Files</h2>
-      <ul id="uploadedFilesList" class="mt-2 list-disc list-inside text-gray-700"></ul>
-    </div>
   </div>
 
   <script>
     const apiUrl = "%%API_URL%%";
-
     const dropZone = document.getElementById('dropZone');
     const fileInput = document.getElementById('fileInput');
     const dropText = document.getElementById('dropText');
@@ -90,19 +59,7 @@
     const overallProgress = document.getElementById('overallProgress');
     const overallProgressText = document.getElementById('overallProgressText');
     const individualProgressContainer = document.getElementById('individualProgressContainer');
-
-    const fileTypesToggle = document.getElementById('fileTypesToggle');
-    const fileTypesContent = document.getElementById('fileTypesContent');
-    const fileTypesArrow = document.getElementById('fileTypesArrow');
-
-    // Initialize droppedFiles globally
-    window.droppedFiles = null;
-
-    // Drop functionality
-    fileTypesToggle.addEventListener('click', () => {
-      fileTypesContent.classList.toggle('hidden');
-      fileTypesArrow.classList.toggle('rotate-180');
-    });
+    let droppedFiles = null;
 
     dropZone.addEventListener('dragover', (e) => {
       e.preventDefault();
@@ -116,154 +73,108 @@
     dropZone.addEventListener('drop', (e) => {
       e.preventDefault();
       dropZone.classList.remove('border-blue-500');
-      window.droppedFiles = e.dataTransfer.files;
-      updateDropText(window.droppedFiles);
+      droppedFiles = e.dataTransfer.files;
+      updateDropText(droppedFiles);
     });
 
     dropZone.addEventListener('click', () => fileInput.click());
 
     fileInput.addEventListener('change', () => {
-      window.droppedFiles = null;
+      droppedFiles = null;
       updateDropText(fileInput.files);
     });
 
     function updateDropText(files) {
       if (!files || files.length === 0) {
         dropText.textContent = 'Drag & drop files here or click to upload';
-        return;
+      } else {
+        dropText.textContent = `${files.length} file(s) selected`;
       }
-      dropText.textContent = `${files.length} file(s) selected`;
     }
 
-    function checkFileType(fileName) {
-      const allowedExtensions = ['.pdf', '.doc', '.docx', '.xls', '.xlsx', '.txt', '.csv', '.eml', '.msg', '.jpg', '.jpeg', '.png', '.gif'];
-      const lower = fileName.toLowerCase();
-      if (lower.endsWith('.zip')) return { allowed: false, message: 'ZIP files are not allowed!' };
-      for (const ext of allowedExtensions) {
-        if (lower.endsWith(ext)) return { allowed: true };
+    async function uploadFiles() {
+      const password = document.getElementById('password').value;
+      const files = droppedFiles || fileInput.files;
+
+      if (!files || files.length === 0) {
+        status.textContent = 'Please select at least one file.';
+        status.classList.add('text-red-500');
+        return;
       }
-      return { allowed: false, message: 'Unsupported file type!' };
+
+      const metadata = [];
+      for (let file of files) {
+        metadata.push({ name: file.name, type: file.type });
+      }
+
+      status.textContent = 'Requesting upload URLs...';
+      status.classList.remove('text-red-500', 'text-green-500');
+      loading.classList.remove('hidden');
+
+      try {
+        const res = await fetch(apiUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ password, files: metadata })
+        });
+
+        const data = await res.json();
+        const uploadTargets = data.body?.files || [];
+
+        let uploaded = 0;
+        individualProgressContainer.innerHTML = '';
+
+        for (let i = 0; i < files.length; i++) {
+          const file = files[i];
+          const { url, fields, name } = uploadTargets[i];
+
+          const formData = new FormData();
+          Object.entries(fields).forEach(([k, v]) => formData.append(k, v));
+          formData.append("file", file);
+
+          const bar = document.createElement('div');
+          bar.classList.add('mb-2');
+          bar.innerHTML = `<label class="text-sm">${file.name}</label><div class="w-full bg-gray-200 rounded-full h-2.5"><div class="bg-green-500 h-2.5 rounded-full" style="width: 0%"></div></div>`;
+          individualProgressContainer.appendChild(bar);
+          const inner = bar.querySelector('.bg-green-500');
+
+          try {
+            const uploadRes = await fetch(url, {
+              method: 'POST',
+              body: formData
+            });
+
+            if (!uploadRes.ok) throw new Error("Failed upload");
+
+            inner.style.width = '100%';
+            uploaded++;
+            updateOverallProgress(uploaded, files.length);
+          } catch (e) {
+            inner.classList.remove('bg-green-500');
+            inner.classList.add('bg-red-500');
+          }
+        }
+
+        loading.classList.add('hidden');
+        if (uploaded === files.length) {
+          status.textContent = 'All files uploaded!';
+          status.classList.add('text-green-500');
+        } else {
+          status.textContent = `Uploaded ${uploaded} of ${files.length} files`;
+          status.classList.add('text-yellow-500');
+        }
+      } catch (err) {
+        console.error(err);
+        loading.classList.add('hidden');
+        status.textContent = 'Something went wrong.';
+        status.classList.add('text-red-500');
+      }
     }
 
     function updateOverallProgress(done, total) {
       const pct = Math.round((done / total) * 100);
       overallProgress.style.width = `${pct}%`;
       overallProgressText.textContent = `${pct}%`;
-    }
-
-    async function uploadFiles() {
-      try {
-        const password = document.getElementById('password').value;
-        const files = window.droppedFiles || fileInput.files;
-        
-        // Check if files exist and have length property
-        if (!files || !files.length) {
-          status.textContent = 'Please select files to upload';
-          status.classList.add('text-red-500');
-          return;
-        }
-
-        // Reset status classes
-        status.classList.remove('text-red-500', 'text-green-500');
-        
-        const metadata = [];
-        for (let i = 0; i < files.length; i++) {
-          const file = files[i];
-          const check = checkFileType(file.name);
-          if (!check.allowed) {
-            status.textContent = check.message;
-            status.classList.add('text-red-500');
-            return;
-          }
-          metadata.push({ name: file.name, type: file.type });
-        }
-
-        status.textContent = 'Getting upload URLs...';
-        loading.classList.remove('hidden');
-
-        try {
-          const presignedRes = await fetch(apiUrl, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ password, files: metadata })
-          });
-
-          if (!presignedRes.ok) {
-            throw new Error(`Server responded with status: ${presignedRes.status}`);
-          }
-
-          const presigned = await presignedRes.json();
-          
-          if (!presigned || !presigned.body || !presigned.body.files) {
-            throw new Error('Invalid response from server');
-          }
-          
-          const uploadResults = presigned.body.files;
-          let uploadedCount = 0;
-
-          individualProgressContainer.innerHTML = '';
-          for (let i = 0; i < files.length; i++) {
-            const file = files[i];
-            const { url, name, key } = uploadResults[i];
-
-            const bar = document.createElement('div');
-            bar.classList.add('mb-2');
-            bar.innerHTML = `<label class="text-sm">${file.name}</label><div class="w-full bg-gray-200 rounded-full h-2.5"><div class="bg-green-500 h-2.5 rounded-full" style="width: 0%"></div></div>`;
-            individualProgressContainer.appendChild(bar);
-            const inner = bar.querySelector('.bg-green-500');
-
-            try {
-              const uploadResponse = await fetch(url, {
-                method: 'PUT',
-                headers: { 'Content-Type': file.type },
-                body: file
-              });
-              
-              if (!uploadResponse.ok) {
-                throw new Error(`Failed to upload ${file.name}: ${uploadResponse.status}`);
-              }
-            } catch (uploadError) {
-              console.error('Upload error:', uploadError);
-              inner.style.width = '0%';
-              inner.classList.remove('bg-green-500');
-              inner.classList.add('bg-red-500');
-              continue;
-            }
-
-            inner.style.width = '100%';
-            updateOverallProgress(++uploadedCount, files.length);
-          }
-
-          if (uploadedCount === files.length) {
-            status.textContent = 'All files uploaded!';
-            status.classList.add('text-green-500');
-            
-            try {
-              await fetch(apiUrl + '/notify', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ password, uploadedFiles: uploadResults.map(f => ({ name: f.name, s3Key: f.key })) })
-              });
-            } catch (notifyError) {
-              console.error('Notification error:', notifyError);
-              // Continue anyway as files were uploaded
-            }
-          } else {
-            status.textContent = `Uploaded ${uploadedCount} of ${files.length} files`;
-            status.classList.add('text-yellow-500');
-          }
-        } catch (error) {
-          console.error('Server error:', error);
-          status.textContent = `Error: ${error.message}`;
-          status.classList.add('text-red-500');
-        }
-      } catch (error) {
-        console.error('General error:', error);
-        status.textContent = `Error: ${error.message}`;
-        status.classList.add('text-red-500');
-      } finally {
-        loading.classList.add('hidden');
-      }
     }
   </script>
 </body>
