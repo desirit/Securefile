@@ -12,21 +12,30 @@
   </div>
 
   <div class="bg-white p-8 rounded-lg shadow-lg w-full max-w-md">
-    <h1 class="text-2xl font-bold text-center text-gray-800 mb-6">Secure File Upload %%COMPANY_NAME%%</h1>
+    <h1 class="text-2xl font-bold text-center text-gray-800 mb-6">
+      Secure File Upload %%COMPANY_NAME%%
+    </h1>
 
+    <!-- Password -->
     <div class="mb-6">
       <label for="password" class="block text-sm font-medium text-gray-700">Password</label>
-      <input type="password" id="password" placeholder="Enter your password" class="mt-1 block w-full px-4 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+      <input type="password" id="password" placeholder="Enter your password"
+             class="mt-1 block w-full px-4 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
     </div>
 
+    <!-- Drag & drop area -->
     <div class="mb-6">
       <label class="block text-sm font-medium text-gray-700">Upload Files</label>
-      <div id="dropZone" class="mt-1 flex flex-col items-center justify-center border-2 border-dashed border-gray-300 rounded-md p-6 cursor-pointer hover:border-blue-500 transition-colors">
-        <span id="dropText" class="text-gray-500">Drag & drop files here or click to upload</span>
+      <div id="dropZone"
+           class="mt-1 flex flex-col items-center justify-center border-2 border-dashed border-gray-300 rounded-md p-6 cursor-pointer hover:border-blue-500 transition-colors">
+        <span id="dropText" class="text-gray-500">
+          Drag & drop files here or click to upload
+        </span>
         <input type="file" id="fileInput" multiple class="hidden" />
       </div>
     </div>
 
+    <!-- Overall progress -->
     <div class="mb-4">
       <label class="block text-sm font-medium text-gray-700">Overall Progress</label>
       <div class="w-full bg-gray-200 rounded-full h-2.5">
@@ -35,22 +44,35 @@
       <p id="overallProgressText" class="text-sm text-gray-600 mt-1">0%</p>
     </div>
 
+    <!-- Individual progress bars -->
     <div id="individualProgressContainer" class="mb-6"></div>
 
-    <button onclick="uploadFiles()" class="w-full bg-blue-600 text-white py-2 px-4 rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2">Upload Files</button>
+    <!-- Upload button -->
+    <button onclick="uploadFiles()"
+            class="w-full bg-blue-600 text-white py-2 px-4 rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2">
+      Upload Files
+    </button>
 
+    <!-- Loading spinner -->
     <div id="loading" class="hidden mt-4 text-center">
-      <svg class="animate-spin h-5 w-5 text-blue-500 mx-auto" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+      <svg class="animate-spin h-5 w-5 text-blue-500 mx-auto"
+           xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+        <circle class="opacity-25" cx="12" cy="12" r="10"
+                stroke="currentColor" stroke-width="4"></circle>
+        <path class="opacity-75" fill="currentColor"
+              d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042
+                 1.135 5.824 3 7.938l3-2.647z"></path>
       </svg>
     </div>
 
+    <!-- Status -->
     <p id="status" class="mt-4 text-center text-sm"></p>
   </div>
 
   <script>
+    // Will be replaced by Amplify with the actual API Gateway URL
     const apiUrl = "%%API_URL%%";
+
     const dropZone = document.getElementById('dropZone');
     const fileInput = document.getElementById('fileInput');
     const dropText = document.getElementById('dropText');
@@ -61,6 +83,7 @@
     const individualProgressContainer = document.getElementById('individualProgressContainer');
     let droppedFiles = null;
 
+    // DRAG & DROP events
     dropZone.addEventListener('dragover', (e) => {
       e.preventDefault();
       dropZone.classList.add('border-blue-500');
@@ -92,16 +115,22 @@
       }
     }
 
+    function updateOverallProgress(done, total) {
+      const pct = Math.round((done / total) * 100);
+      overallProgress.style.width = `${pct}%`;
+      overallProgressText.textContent = `${pct}%`;
+    }
+
     async function uploadFiles() {
       const password = document.getElementById('password').value;
       const files = droppedFiles || fileInput.files;
-
-      if (!files || files.length === 0) {
+      if (!files || !files.length) {
         status.textContent = 'Please select at least one file.';
         status.classList.add('text-red-500');
         return;
       }
 
+      // Prepare metadata
       const metadata = [];
       for (let file of files) {
         metadata.push({ name: file.name, type: file.type });
@@ -112,69 +141,85 @@
       loading.classList.remove('hidden');
 
       try {
+        // Call the Lambda to get presigned POST
         const res = await fetch(apiUrl, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ password, files: metadata })
         });
+        if (!res.ok) {
+          throw new Error(`Server responded with status ${res.status}`);
+        }
 
         const data = await res.json();
-        const uploadTargets = data.body?.files || [];
+        // "files" array is top-level in the Lambda response
+        const uploadTargets = data.files || [];
 
-        let uploaded = 0;
+        let uploadedCount = 0;
         individualProgressContainer.innerHTML = '';
 
+        // For each file, do a presigned POST
         for (let i = 0; i < files.length; i++) {
           const file = files[i];
-          const { url, fields, name } = uploadTargets[i];
+          const { url, fields, name } = uploadTargets[i] || {};
 
-          const formData = new FormData();
-          Object.entries(fields).forEach(([k, v]) => formData.append(k, v));
-          formData.append("file", file);
-
+          // Add a progress bar
           const bar = document.createElement('div');
           bar.classList.add('mb-2');
-          bar.innerHTML = `<label class="text-sm">${file.name}</label><div class="w-full bg-gray-200 rounded-full h-2.5"><div class="bg-green-500 h-2.5 rounded-full" style="width: 0%"></div></div>`;
+          bar.innerHTML = `
+            <label class="text-sm">${file.name}</label>
+            <div class="w-full bg-gray-200 rounded-full h-2.5">
+              <div class="bg-green-500 h-2.5 rounded-full" style="width: 0%"></div>
+            </div>`;
           individualProgressContainer.appendChild(bar);
           const inner = bar.querySelector('.bg-green-500');
 
+          if (!url || !fields) {
+            // If the array length doesn't match or there's an error
+            inner.classList.remove('bg-green-500');
+            inner.classList.add('bg-red-500');
+            continue;
+          }
+
           try {
+            const formData = new FormData();
+            Object.entries(fields).forEach(([k, v]) => formData.append(k, v));
+            formData.append('file', file);
+
             const uploadRes = await fetch(url, {
               method: 'POST',
               body: formData
             });
 
-            if (!uploadRes.ok) throw new Error("Failed upload");
+            if (!uploadRes.ok) {
+              throw new Error(`Failed to upload ${file.name}`);
+            }
 
             inner.style.width = '100%';
-            uploaded++;
-            updateOverallProgress(uploaded, files.length);
-          } catch (e) {
+            updateOverallProgress(++uploadedCount, files.length);
+
+          } catch (uploadErr) {
+            console.error('Upload error', uploadErr);
             inner.classList.remove('bg-green-500');
             inner.classList.add('bg-red-500');
           }
         }
 
         loading.classList.add('hidden');
-        if (uploaded === files.length) {
+        if (uploadedCount === files.length) {
           status.textContent = 'All files uploaded!';
           status.classList.add('text-green-500');
         } else {
-          status.textContent = `Uploaded ${uploaded} of ${files.length} files`;
+          status.textContent = `Uploaded ${uploadedCount} of ${files.length} files`;
           status.classList.add('text-yellow-500');
         }
+
       } catch (err) {
         console.error(err);
         loading.classList.add('hidden');
-        status.textContent = 'Something went wrong.';
+        status.textContent = err.message || 'Error uploading files';
         status.classList.add('text-red-500');
       }
-    }
-
-    function updateOverallProgress(done, total) {
-      const pct = Math.round((done / total) * 100);
-      overallProgress.style.width = `${pct}%`;
-      overallProgressText.textContent = `${pct}%`;
     }
   </script>
 </body>
