@@ -1,81 +1,79 @@
 import json
 import boto3
 import os
-import time
-from datetime import datetime
-import re
+import datetime
 
-s3 = boto3.client("s3")
-BUCKET_NAME = os.getenv("BUCKET_NAME")
-UPLOAD_PASSWORD = os.getenv("UPLOAD_PASSWORD")
-CLIENT_PREFIX = os.getenv("CLIENT_PREFIX", "default")
-ALLOWED_EXTENSIONS = {"pdf", "doc", "docx", "xls", "xlsx", "csv", "png", "jpg", "jpeg", "eml", "msg", "txt", "gif"}
-
-def build_response(status_code, message):
-    return {
-        "statusCode": status_code,
-        "headers": {
-            "Access-Control-Allow-Origin": "*",
-            "Access-Control-Allow-Headers": "*",
-            "Access-Control-Allow-Methods": "POST,OPTIONS",
-        },
-        "body": json.dumps({ "body": message }) if isinstance(message, str) else json.dumps(message)
-    }
+s3 = boto3.client('s3')
+bucket_name = os.environ['UPLOAD_BUCKET']  # <== Must match "UPLOAD_BUCKET" from CF
+url_expiration = 3600
 
 def lambda_handler(event, context):
-    if event.get("httpMethod") == "OPTIONS":
-        return build_response(200, {"message": "CORS preflight OK"})
-
     try:
         body = json.loads(event.get("body", "{}"))
-        path = event.get("path", "")
 
-        if path.endswith("/notify"):
-            print("Received upload confirmation:")
-            print(json.dumps(body, indent=2))
-            return build_response(200, { "message": "Upload logged successfully" })
+        password = body.get('password')
+        files = body.get('files', [])
 
-        if body.get("password") != UPLOAD_PASSWORD:
-            return build_response(401, { "error": "Unauthorized: Incorrect password" })
+        # Check password
+        if password != os.environ['UPLOAD_PASSWORD']:
+            return error_response(403, "Unauthorized")
 
-        files = body.get("files", [])
-        if not files:
-            return build_response(400, { "error": "No files provided" })
-        if len(files) > 10:
-            return build_response(400, { "error": "Maximum 10 files allowed" })
-
-        presigned_files = []
-        timestamp = int(time.time())
-        date_folder = datetime.now().strftime("%Y-%m-%d")
-
+        # Generate presigned POST for each file
+        generated_urls = []
         for file in files:
-            name = file.get("name")
-            ctype = file.get("type", "application/octet-stream")
-            ext = name.split(".")[-1].lower()
+            key = f"{datetime.datetime.utcnow().strftime('%Y-%m-%d/%s_')}{file['name']}"
+            ctype = file.get('type', 'application/octet-stream')
 
-            if ext not in ALLOWED_EXTENSIONS:
-                return build_response(400, { "error": f"Invalid file type: {name}" })
-
-            safe_name = re.sub(r"[^\w\.-]", "_", name)
-            key = f"{date_folder}/{timestamp}_{safe_name}"
-
-            url = s3.generate_presigned_url(
-                "put_object",
-                Params={
-                    "Bucket": BUCKET_NAME,
-                    "Key": key,
-                    "ContentType": ctype,
-                    "Metadata": {
-                        "client": CLIENT_PREFIX,
-                        "original-filename": name
-                    }
-                },
-                ExpiresIn=3600
+            fields = {
+                "acl": "private",
+                "Content-Type": ctype
+            }
+            conditions = [
+                {"acl": "private"},
+                {"Content-Type": ctype}
+            ]
+            presigned = s3.generate_presigned_post(
+                Bucket=bucket_name,
+                Key=key,
+                Fields=fields,
+                Conditions=conditions,
+                ExpiresIn=url_expiration
             )
+            generated_urls.append({
+                'name': file['name'],
+                'url': presigned['url'],
+                'fields': presigned['fields'],
+                'key': key
+            })
 
-            presigned_files.append({ "name": name, "url": url, "key": key })
-
-        return build_response(200, { "message": "Presigned URLs generated", "files": presigned_files })
+        return success_response({
+            "message": "Presigned POST URLs generated",
+            "files": generated_urls
+        })
 
     except Exception as e:
-        return build_response(500, { "error": str(e) })
+        print("Lambda error:", str(e))
+        return error_response(500, str(e))
+
+
+def success_response(body_dict):
+    return {
+        "statusCode": 200,
+        "headers": {
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "POST,OPTIONS",
+            "Access-Control-Allow-Headers": "*"
+        },
+        "body": json.dumps(body_dict)
+    }
+
+def error_response(status, message):
+    return {
+        "statusCode": status,
+        "headers": {
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "POST,OPTIONS",
+            "Access-Control-Allow-Headers": "*"
+        },
+        "body": json.dumps({ "error": message })
+    }
