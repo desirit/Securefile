@@ -67,11 +67,19 @@
 
     <!-- Status -->
     <p id="status" class="mt-4 text-center text-sm"></p>
+    
+    <!-- Debug info (hidden by default) -->
+    <div id="debugInfo" class="mt-4 p-4 bg-gray-100 rounded-md hidden">
+      <h3 class="text-sm font-bold mb-2">Debug Information</h3>
+      <pre id="debugText" class="text-xs overflow-auto max-h-40"></pre>
+      <button onclick="clearDebug()" class="mt-2 text-xs text-blue-500">Clear</button>
+    </div>
   </div>
 
   <script>
     // Will be replaced by Amplify with the actual API Gateway URL
     const apiUrl = "%%API_URL%%";
+    const debugMode = false; // Set to true to show debug panel
 
     const dropZone = document.getElementById('dropZone');
     const fileInput = document.getElementById('fileInput');
@@ -81,7 +89,36 @@
     const overallProgress = document.getElementById('overallProgress');
     const overallProgressText = document.getElementById('overallProgressText');
     const individualProgressContainer = document.getElementById('individualProgressContainer');
+    const debugInfo = document.getElementById('debugInfo');
+    const debugText = document.getElementById('debugText');
     let droppedFiles = null;
+
+    // Initialize debug panel
+    if (debugMode) {
+      debugInfo.classList.remove('hidden');
+    }
+
+    // Debug logger function
+    function debugLog(message, obj = null) {
+      if (!debugMode) return;
+      
+      const timestamp = new Date().toLocaleTimeString();
+      let logMessage = `[${timestamp}] ${message}`;
+      
+      if (obj) {
+        try {
+          logMessage += '\n' + JSON.stringify(obj, null, 2);
+        } catch (e) {
+          logMessage += '\n[Object cannot be stringified]';
+        }
+      }
+      
+      debugText.textContent = logMessage + '\n\n' + debugText.textContent;
+    }
+
+    function clearDebug() {
+      debugText.textContent = '';
+    }
 
     // DRAG & DROP events
     dropZone.addEventListener('dragover', (e) => {
@@ -103,7 +140,7 @@
     dropZone.addEventListener('click', () => fileInput.click());
 
     fileInput.addEventListener('change', () => {
-      droppedFiles = null;
+      droppedFiles = fileInput.files;
       updateDropText(fileInput.files);
     });
 
@@ -124,6 +161,13 @@
     async function uploadFiles() {
       const password = document.getElementById('password').value;
       const files = droppedFiles || fileInput.files;
+      
+      if (!password) {
+        status.textContent = 'Please enter the upload password';
+        status.classList.add('text-red-500');
+        return;
+      }
+      
       if (!files || !files.length) {
         status.textContent = 'Please select at least one file.';
         status.classList.add('text-red-500');
@@ -133,93 +177,210 @@
       // Prepare metadata
       const metadata = [];
       for (let file of files) {
-        metadata.push({ name: file.name, type: file.type });
+        metadata.push({ name: file.name, type: file.type, size: file.size });
       }
+      
+      debugLog('Files selected for upload', metadata);
 
       status.textContent = 'Requesting upload URLs...';
-      status.classList.remove('text-red-500', 'text-green-500');
+      status.classList.remove('text-red-500', 'text-green-500', 'text-yellow-500');
       loading.classList.remove('hidden');
+      
+      // Reset progress indicators
+      overallProgress.style.width = '0%';
+      overallProgressText.textContent = '0%';
+      individualProgressContainer.innerHTML = '';
 
       try {
+        debugLog('Calling Lambda API', { url: apiUrl });
+        
         // Call the Lambda to get presigned POST
         const res = await fetch(apiUrl, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ password, files: metadata })
         });
+        
+        debugLog('Lambda API response status', { status: res.status });
+        
+        let responseText;
+        try {
+          responseText = await res.text();
+          debugLog('Lambda API raw response', { text: responseText });
+        } catch (e) {
+          throw new Error(`Failed to read response: ${e.message}`);
+        }
+        
         if (!res.ok) {
-          throw new Error(`Server responded with status ${res.status}`);
+          throw new Error(`Server responded with status ${res.status}: ${responseText}`);
+        }
+        
+        let data;
+        try {
+          data = JSON.parse(responseText);
+        } catch (e) {
+          throw new Error(`Invalid JSON response: ${e.message}`);
         }
 
-        const data = await res.json();
         // "files" array is top-level in the Lambda response
         const uploadTargets = data.files || [];
+        
+        debugLog('Received upload targets', uploadTargets);
+
+        if (uploadTargets.length === 0) {
+          throw new Error('No upload targets received from server');
+        }
 
         let uploadedCount = 0;
-        individualProgressContainer.innerHTML = '';
-
+        let failedCount = 0;
+        
         // For each file, do a presigned POST
         for (let i = 0; i < files.length; i++) {
           const file = files[i];
-          const { url, fields, name } = uploadTargets[i] || {};
+          const { url, fields, name, key } = uploadTargets[i] || {};
 
           // Add a progress bar
+          const progressId = `progress-${i}`;
           const bar = document.createElement('div');
           bar.classList.add('mb-2');
           bar.innerHTML = `
-            <label class="text-sm">${file.name}</label>
+            <div class="flex justify-between items-center">
+              <label class="text-sm truncate max-w-xs">${file.name}</label>
+              <span class="text-xs" id="${progressId}-text">0%</span>
+            </div>
             <div class="w-full bg-gray-200 rounded-full h-2.5">
-              <div class="bg-green-500 h-2.5 rounded-full" style="width: 0%"></div>
+              <div id="${progressId}" class="bg-green-500 h-2.5 rounded-full" style="width: 0%"></div>
             </div>`;
           individualProgressContainer.appendChild(bar);
-          const inner = bar.querySelector('.bg-green-500');
+          const progressBar = document.getElementById(progressId);
+          const progressText = document.getElementById(`${progressId}-text`);
 
           if (!url || !fields) {
-            // If the array length doesn't match or there's an error
-            inner.classList.remove('bg-green-500');
-            inner.classList.add('bg-red-500');
+            debugLog(`Missing URL or fields for file: ${file.name}`);
+            progressBar.classList.remove('bg-green-500');
+            progressBar.classList.add('bg-red-500');
+            progressBar.style.width = '100%';
+            progressText.textContent = 'Failed';
+            failedCount++;
             continue;
           }
 
           try {
+            debugLog(`Preparing to upload ${file.name} to ${url}`);
+            
             const formData = new FormData();
-            Object.entries(fields).forEach(([k, v]) => formData.append(k, v));
+            
+            // Important: Order matters for S3 - add fields before the file
+            Object.entries(fields).forEach(([k, v]) => {
+              debugLog(`Adding field ${k} to FormData`);
+              formData.append(k, v);
+            });
+            
+            // The file must be the last field
             formData.append('file', file);
-
-            const uploadRes = await fetch(url, {
-              method: 'POST',
-              body: formData
+            
+            debugLog(`Starting upload for ${file.name}`);
+            
+            // Use XMLHttpRequest for progress tracking
+            const xhr = new XMLHttpRequest();
+            
+            // Set up progress monitoring
+            xhr.upload.addEventListener('progress', (event) => {
+              if (event.lengthComputable) {
+                const percentComplete = Math.round((event.loaded / event.total) * 100);
+                progressBar.style.width = `${percentComplete}%`;
+                progressText.textContent = `${percentComplete}%`;
+                debugLog(`Upload progress for ${file.name}: ${percentComplete}%`);
+              }
+            });
+            
+            // Promise wrapper for XMLHttpRequest
+            await new Promise((resolve, reject) => {
+              xhr.open('POST', url, true);
+              
+              xhr.onload = () => {
+                if (xhr.status >= 200 && xhr.status < 300) {
+                  debugLog(`Upload successful for ${file.name}`);
+                  resolve(xhr.response);
+                } else {
+                  debugLog(`Upload failed for ${file.name}: ${xhr.status} ${xhr.statusText}`);
+                  reject(new Error(`${xhr.status} ${xhr.statusText}`));
+                }
+              };
+              
+              xhr.onerror = () => {
+                debugLog(`Network error for ${file.name}`);
+                reject(new Error('Network error occurred'));
+              };
+              
+              xhr.send(formData);
             });
 
-            if (!uploadRes.ok) {
-              throw new Error(`Failed to upload ${file.name}`);
-            }
-
-            inner.style.width = '100%';
+            progressBar.style.width = '100%';
+            progressText.textContent = 'Done';
             updateOverallProgress(++uploadedCount, files.length);
-
+            
           } catch (uploadErr) {
-            console.error('Upload error', uploadErr);
-            inner.classList.remove('bg-green-500');
-            inner.classList.add('bg-red-500');
+            debugLog(`Upload error for ${file.name}`, { error: uploadErr.message });
+            progressBar.classList.remove('bg-green-500');
+            progressBar.classList.add('bg-red-500');
+            progressBar.style.width = '100%';
+            progressText.textContent = 'Failed';
+            failedCount++;
           }
         }
 
         loading.classList.add('hidden');
-        if (uploadedCount === files.length) {
-          status.textContent = 'All files uploaded!';
+        
+        if (failedCount === 0 && uploadedCount === files.length) {
+          status.textContent = 'All files uploaded successfully!';
           status.classList.add('text-green-500');
-        } else {
+        } else if (uploadedCount > 0) {
           status.textContent = `Uploaded ${uploadedCount} of ${files.length} files`;
           status.classList.add('text-yellow-500');
+        } else {
+          status.textContent = 'Failed to upload any files';
+          status.classList.add('text-red-500');
         }
+        
+        // Reset file inputs for next upload
+        fileInput.value = '';
+        droppedFiles = null;
+        updateDropText(null);
 
       } catch (err) {
-        console.error(err);
+        debugLog('Request error', { message: err.message });
         loading.classList.add('hidden');
         status.textContent = err.message || 'Error uploading files';
         status.classList.add('text-red-500');
       }
+    }
+
+    // Add connection test function
+    async function testConnection() {
+      try {
+        const testUrl = apiUrl.replace(/\/[^\/]*$/, '/');
+        debugLog(`Testing connection to API: ${testUrl}`);
+        
+        const res = await fetch(testUrl, {
+          method: 'OPTIONS'
+        });
+        
+        debugLog(`Connection test result: ${res.status}`);
+        return res.status >= 200 && res.status < 300;
+      } catch (e) {
+        debugLog(`Connection test error: ${e.message}`);
+        return false;
+      }
+    }
+
+    // If debug mode is enabled, auto-test connection on page load
+    if (debugMode) {
+      window.addEventListener('load', async () => {
+        debugLog('Page loaded, testing API connection...');
+        const connectionOk = await testConnection();
+        debugLog(`API connection test: ${connectionOk ? 'SUCCESS' : 'FAILED'}`);
+      });
     }
   </script>
 </body>
